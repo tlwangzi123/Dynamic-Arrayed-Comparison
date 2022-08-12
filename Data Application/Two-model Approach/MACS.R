@@ -914,3 +914,5 @@ lines(c(0,0.1),c(0,0.1),lty=1,lwd=2)
 legend("bottomright",legend=c('Family-wise error = alpha','Seronegative (historical)','Seronegative (newer)','Seropositive (newer)'),
        lty=1:4,pch=c(NA,NA,NA,NA),lwd=2)
 
+
+    
