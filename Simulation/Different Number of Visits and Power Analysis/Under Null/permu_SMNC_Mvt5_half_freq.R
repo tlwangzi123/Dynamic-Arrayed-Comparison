@@ -45,6 +45,7 @@ machines <- scan("$SLURM_SUBMIT_DIR/node_list.txt", what="")
 machines
 nmach = length(machines)
 
+
 sfInit(parallel=TRUE,type='MPI',cpus=nmach,socketHosts=machines)
 
 #################################################################################
