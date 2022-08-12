@@ -37,3 +37,4 @@ lines(c(0.001,.1),c(0.001,.1),lty=4,col="grey40",lwd=2)
 
 
 legend("topleft",cex=1.2,legend=c('chisq','permu','Family-wise error = alpha'), col=c("grey0","grey0","grey40"), inset = 0, lty=c(1,2,4),pch=c(NA,NA,NA),lwd=2)
+
