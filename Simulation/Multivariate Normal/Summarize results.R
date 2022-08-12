@@ -26,3 +26,4 @@ plot(r4~seq(0.001,0.1,by=0.0001),cex.main=1.5, cex.lab=1.3,ylim=c(0,0.1),type='l
 lines(c(0.001,.1),c(0.001,.1),lty=2,col="grey50",lwd=2)
 legend("bottomright",legend=c('From simulation','Family-wise error = alpha'),
        col=c("grey0","grey50"),lty=c(1,2),pch=c(NA,NA),lwd=2)
+
