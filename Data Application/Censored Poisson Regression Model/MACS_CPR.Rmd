@@ -1,0 +1,1037 @@
+---
+title: "MACS_CPR"
+author: "Zi Wang"
+date: "5/5/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(lubridate)
+library(mixtools)
+library(ggplot2)
+library(dplyr)
+library(survival)
+library(reshape2)
+library(lme4)
+library(VGAM)
+```
+
+
+```{r}
+np_hiv_labs=read.csv("np_hiv_labs.csv")
+pe=read.csv("pe.csv")
+
+length(unique(np_hiv_labs$MACSID)) # 5479 subjects
+
+np_hiv_labs=np_hiv_labs[order(np_hiv_labs$MACSID,np_hiv_labs$VISIT),]
+Total=merge(np_hiv_labs,pe,by=c("MACSID","VISIT"))
+Total=Total[order(Total$MACSID,Total$VISIT),c("MACSID","VISITY.x","VISIT","FRSTDTHY","LEU3N","LASTVSTY","CESD","BSDATEY","BIRTHDT","COHORT","CENTR.x","HCVSUM","HBVSUM","STATUS", "MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]
+
+Total$CESD[Total$CESD==-1]=NA
+Total$HBVSUM[Total$HBVSUM==-8]=NA
+Total$HCVSUM[Total$HCVSUM==-8]=NA
+Total$HCV=as.numeric(Total$HCVSUM>2)
+Total$AGE=Total$BSDATEY-decimal_date(as.Date(Total$BIRTHDT, origin="1960-01-01"))
+
+macsid=unique(Total$MACSID)
+```
+
+```{r}
+yy=function(X,s){
+  tt=NULL
+  for(i in unique(X$MACSID)){
+    KK=X[X$MACSID==i,]
+    tt=c(tt,sum(!is.na(KK[,s])))
+  }
+  return(tt)
+}
+X.MOTOR=yy(Total,"MOTOR07_NBA")
+# X.MEM=yy(Total,"MEM07_NBA")
+# X.WMEM=yy(Total,"WMEM07_NBA")
+# X.EXEC=yy(Total,"EXEC07_NBA")
+# X.SPEED=yy(Total,"SPEED07_NBA")
+# X.LEARN=yy(Total,"LEARN07_NBA")
+hist(X.MOTOR)
+table(X.MOTOR)
+
+X=Total[!(is.na(Total$MEM07_NBA)) & !(is.na(Total$WMEM07_NBA)) & !(is.na(Total$LEARN07_NBA)) &
+          !(is.na(Total$SPEED07_NBA)) & !(is.na(Total$MOTOR07_NBA)) & !(is.na(Total$EXEC07_NBA)),]
+M=NULL
+for(i in unique(X$MACSID)){
+  KK=X[X$MACSID==i,]
+  KK$VISIT=1:nrow(KK)
+  M=rbind(M,KK)
+}
+visitnum=NULL
+time=NULL
+for(i in unique(X$MACSID)){
+  visitnum=c(visitnum,nrow(X[X$MACSID==i,]))
+  time=c(time,X[X$MACSID==i,"VISITY.x"][nrow(X[X$MACSID==i,])]-X[X$MACSID==i,"VISITY.x"][1])
+}
+
+freq=(visitnum[time>0]-1)/time[time>0]
+```
+
+
+```{r}
+mixed=normalmixEM(freq,k=3)
+
+plot_mix_comps <- function(x, mu, sigma, lam) {
+  lam * dnorm(x, mu, sigma)
+}
+data.frame(x = mixed$x) %>%
+  ggplot() +
+  geom_histogram(aes(x, ..density..), binwidth = .05, colour = "black", 
+                 fill = "white") +
+  stat_function(geom = "line", fun = plot_mix_comps,
+                args = list(mixed$mu[1], mixed$sigma[1], lam = mixed$lambda[1]),
+                colour = "red", lwd = 1.5) +
+  stat_function(geom = "line", fun = plot_mix_comps,
+                args = list(mixed$mu[2], mixed$sigma[2], lam = mixed$lambda[2]),
+                colour = "blue", lwd = 1.5) +
+  stat_function(geom = "line", fun = plot_mix_comps,
+                args = list(mixed$mu[3], mixed$sigma[3], lam = mixed$lambda[3]),
+                colour = "green", lwd = 1.5) +
+  ylab("Density")
+```
+
+#Divide groups by 2001
+#Define death indicator and use survival models
+#Define frequency and use Poisson regression
+
+```{r}
+Y=X[X$VISITY.x<2001,]
+visitnum.y=NULL
+time.y=NULL
+for(i in unique(Y$MACSID)){
+  visitnum.y=c(visitnum.y,nrow(Y[Y$MACSID==i,]))
+  time.y=c(time.y,Y[Y$MACSID==i,"VISITY.x"][nrow(Y[Y$MACSID==i,])]-Y[Y$MACSID==i,"VISITY.x"][1])
+}
+
+freq.y=(visitnum.y[time.y>0]-1)/time.y[time.y>0]
+
+X=Total[!(is.na(Total$MEM07_NBA)) & !(is.na(Total$WMEM07_NBA)) & !(is.na(Total$LEARN07_NBA)) &
+          !(is.na(Total$SPEED07_NBA)) & !(is.na(Total$MOTOR07_NBA)) & !(is.na(Total$EXEC07_NBA)),]
+
+Y=X[X$VISITY.x<2001,]
+History_ID=unique(Y$MACSID)
+surv_his=NULL
+for(i in History_ID){
+  KK=X[X$MACSID==i,]
+  start=na.omit(KK$VISITY.x)[1]
+  ind=ifelse(sum(!is.na(KK$FRSTDTHY))>0 & (na.omit(KK$FRSTDTHY)[1]<2001),1,0)
+  # ind = 0 means survival
+  if(ind==1)
+    time=na.omit(KK$FRSTDTHY)[1]-na.omit(KK$VISITY.x)[1]
+  else
+    time=min(2001,na.omit(KK$VISITY.x)[length(na.omit(KK$VISITY.x))]+4)-na.omit(KK$VISITY.x)[1]
+  
+  leu3n=ifelse(sum(!is.na(KK$LEU3N))==0,NA,na.omit(KK$LEU3N)[1])
+  cesd=ifelse(sum(!is.na(KK$CESD))==0,NA,na.omit(KK$CESD)[1])
+  hcv=ifelse(sum(!is.na(KK$HCV))==0,NA,na.omit(KK$HCV)[1])
+  age=ifelse(sum(!is.na(KK$AGE))==0,NA,na.omit(KK$AGE)[1])
+  center=ifelse(sum(!is.na(KK$CENTR.x))==0,NA,na.omit(KK$CENTR.x)[1])
+  status=ifelse(sum(!is.na(KK$STATUS))==0,NA,na.omit(KK$STATUS)[1])
+  
+  surv_his=rbind(surv_his,c(time,ind,leu3n,cesd,hcv,age,center,status,start))
+}
+surv_his=as.data.frame(surv_his)
+names(surv_his)=c("time","indicator","LEU3N","CESD","HCV","AGE","CENTER","STATUS","start")
+apply(surv_his,2,function(v) sum(is.na(v)))
+# replace missing value with mean
+surv_his$CESD[is.na(surv_his$CESD)]=mean(na.omit(surv_his$CESD))
+surv_his$LEU3N[is.na(surv_his$LEU3N)]=mean(na.omit(surv_his$LEU3N))
+surv_his$LEU3N_log=log(surv_his$LEU3N+1)
+surv_his$LEU3N2=surv_his$LEU3N^2
+surv_his$STATUS=ifelse(surv_his$STATUS==1,0,1)
+surv_his$HCV[is.na(surv_his$HCV)]=0
+dim(surv_his)
+```
+
+```{r}
+cox = coxph(Surv(time, indicator) ~ LEU3N+LEU3N2+CESD+HCV+AGE+factor(CENTER)+STATUS,data=surv_his)
+
+survtime_his=summary(survfit(cox,surv_his[,c('LEU3N',"LEU3N2","CESD","HCV","AGE","CENTER","STATUS")]))[['table']][,'median']
+survtime_his[is.na(survtime_his)]=2001-surv_his$start[is.na(survtime_his)]
+
+coxsnellres=surv_his$indicator-resid(cox,type="martingale")
+
+## Then using NA method to estimate the cumulative hazard function for residuals;
+fitres=survfit(coxph(Surv(coxsnellres,surv_his$indicator)~1,method='breslow'),type='aalen')
+plot(fitres$time,-log(fitres$surv),type='s',xlab='Cox-Snell Residuals', 
+     ylab='Estimated Cumulative Hazard Function',
+     main='Cox-Snell Residual Plot')
+abline(0,1,col='red',lty=2)
+
+
+Y=X[X$VISITY.x<2001,]
+History_ID=unique(Y$MACSID)
+freq_his=NULL
+for(i in History_ID){
+  KK=X[X$MACSID==i,]
+  # ind=ifelse(sum(!is.na(KK$FRSTDTHY))==0|na.omit(KK$FRSTDTHY)[1]<2001,1,0)
+  ind=ifelse(sum(!is.na(KK$FRSTDTHY))>0 & (na.omit(KK$FRSTDTHY)[1]<2001),1,0)
+  if(ind==1)
+    time=na.omit(KK$FRSTDTHY)[1]-na.omit(KK$VISITY.x)[1]
+  else
+    time=min(2001,na.omit(KK$VISITY.x)[length(na.omit(KK$VISITY.x))]+4)-na.omit(KK$VISITY.x)[1]
+  
+  freq=nrow(KK)
+  leu3n=ifelse(sum(!is.na(KK$LEU3N))==0,NA,na.omit(KK$LEU3N)[1])
+  cesd=ifelse(sum(!is.na(KK$CESD))==0,NA,na.omit(KK$CESD)[1])
+  hcv=ifelse(sum(!is.na(KK$HCV))==0,NA,na.omit(KK$HCV)[1])
+  age=ifelse(sum(!is.na(KK$AGE))==0,NA,na.omit(KK$AGE)[1])
+  center=ifelse(sum(!is.na(KK$CENTR.x))==0,NA,na.omit(KK$CENTR.x)[1])
+  status=ifelse(sum(!is.na(KK$STATUS))==0,NA,na.omit(KK$STATUS)[1])
+
+  freq_his=rbind(freq_his,c(time,freq,leu3n,cesd,hcv,age,center,status))
+}
+freq_his=as.data.frame(freq_his)
+names(freq_his)=c("time","freq","LEU3N","CESD","HCV","AGE","CENTER","STATUS")
+apply(freq_his,2,function(v) sum(is.na(v)))
+freq_his$CESD[is.na(freq_his$CESD)]=mean(na.omit(freq_his$CESD))
+freq_his$LEU3N[is.na(freq_his$LEU3N)]=mean(na.omit(freq_his$LEU3N))
+freq_his$LEU3N_log=log(freq_his$LEU3N+1)
+freq_his$LEU3N2=freq_his$LEU3N^2
+freq_his$STATUS=ifelse(freq_his$STATUS==1,0,1)
+freq_his$HCV[is.na(freq_his$HCV)]=0
+dim(freq_his)
+
+count <- glm(freq~LEU3N+LEU3N2+AGE+STATUS+factor(CENTER)+offset(log(time)),family=poisson(link=log),data=freq_his)
+lambdas_his=exp(as.matrix(cbind(rep(1,nrow(freq_his)),cbind(freq_his[,c("LEU3N","LEU3N2","AGE","STATUS")], 
+                                                        ifelse(freq_his$CENTER==2,1,0), 
+                                                        ifelse(freq_his$CENTER==3,1,0), 
+                                                        ifelse(freq_his$CENTER==4,1,0))))%*%as.matrix(count[['coefficients']])[,1])
+```
+
+
+Perform CPR: 
+
+```{r}
+Y=X[X$VISITY.x<2001,]
+History_ID=unique(Y$MACSID)
+freq_surv_his=NULL
+for(i in History_ID){
+  KK=X[X$MACSID==i,]
+  # ind=ifelse(sum(!is.na(KK$FRSTDTHY))==0|na.omit(KK$FRSTDTHY)[1]<2001,1,0)
+  ind=ifelse(sum(!is.na(KK$FRSTDTHY))>0 & (na.omit(KK$FRSTDTHY)[1]<2001),1,0)
+  if(ind==1)
+    time=na.omit(KK$FRSTDTHY)[1]-na.omit(KK$VISITY.x)[1]
+  else
+    time=min(2001,na.omit(KK$VISITY.x)[length(na.omit(KK$VISITY.x))]+4)-na.omit(KK$VISITY.x)[1]
+  
+  freq=nrow(KK)
+  leu3n=ifelse(sum(!is.na(KK$LEU3N))==0,NA,na.omit(KK$LEU3N)[1])
+  cesd=ifelse(sum(!is.na(KK$CESD))==0,NA,na.omit(KK$CESD)[1])
+  hcv=ifelse(sum(!is.na(KK$HCV))==0,NA,na.omit(KK$HCV)[1])
+  age=ifelse(sum(!is.na(KK$AGE))==0,NA,na.omit(KK$AGE)[1])
+  center=ifelse(sum(!is.na(KK$CENTR.x))==0,NA,na.omit(KK$CENTR.x)[1])
+  status=ifelse(sum(!is.na(KK$STATUS))==0,NA,na.omit(KK$STATUS)[1])
+
+  freq_surv_his=rbind(freq_surv_his,c(time,freq,ind,leu3n,cesd,hcv,age,center,status))
+}
+freq_surv_his=as.data.frame(freq_surv_his)
+names(freq_surv_his)=c("time","freq","indicator","LEU3N","CESD","HCV","AGE",
+                       "CENTER","STATUS")
+apply(freq_surv_his,2,function(v) sum(is.na(v)))
+freq_surv_his$CESD[is.na(freq_surv_his$CESD)]=mean(na.omit(freq_surv_his$CESD))
+freq_surv_his$LEU3N[is.na(freq_surv_his$LEU3N)]=mean(na.omit(freq_surv_his$LEU3N))
+freq_surv_his$LEU3N_log=log(freq_surv_his$LEU3N+1)
+freq_surv_his$LEU3N2=freq_surv_his$LEU3N^2
+freq_surv_his$STATUS=ifelse(freq_surv_his$STATUS==1,0,1)
+freq_surv_his$HCV[is.na(freq_surv_his$HCV)]=0
+dim(freq_surv_his)
+
+# Perform CPR model
+model_pred_N = vglm(SurvS4(freq, 1 - indicator) ~ LEU3N+LEU3N2+
+                    AGE+STATUS+factor(CENTER), offset = log(time), cens.poisson,
+                    data = freq_surv_his)
+summary(model_pred_N)
+```
+
+## This is new data set from 2001
+
+```{r}
+X=Total[!(is.na(Total$MEM07_NBA)) & !(is.na(Total$WMEM07_NBA)) & !(is.na(Total$LEARN07_NBA)) &
+          !(is.na(Total$SPEED07_NBA)) & !(is.na(Total$MOTOR07_NBA)) & !(is.na(Total$EXEC07_NBA)),]
+new_cohort=NULL
+for(i in unique(X$MACSID)){
+  KK=na.omit(X$VISITY.x[X$MACSID==i])
+  if(min(KK)>=2001 & min(KK)<2017)
+    new_cohort=c(new_cohort,i)
+}
+length(new_cohort)
+
+Z=X[X$MACSID%in%new_cohort,]
+surv_fut=NULL
+for(i in new_cohort){
+  KK=X[X$MACSID==i,]
+  start=na.omit(KK$VISITY.x)[1]
+  
+  leu3n=ifelse(sum(!is.na(KK$LEU3N))==0,NA,na.omit(KK$LEU3N)[1])
+  cesd=ifelse(sum(!is.na(KK$CESD))==0,NA,na.omit(KK$CESD)[1])
+  hcv=ifelse(sum(!is.na(KK$HCV))==0,NA,na.omit(KK$HCV)[1])
+  age=ifelse(sum(!is.na(KK$AGE))==0,NA,na.omit(KK$AGE)[1])
+  center=ifelse(sum(!is.na(KK$CENTR.x))==0,NA,na.omit(KK$CENTR.x)[1])
+  status=ifelse(sum(!is.na(KK$STATUS))==0,NA,na.omit(KK$STATUS)[1])
+  
+  surv_fut=rbind(surv_fut,c(start,leu3n,cesd,hcv,age,center,status))
+}
+surv_fut=as.data.frame(surv_fut)
+names(surv_fut)=c("start","LEU3N","CESD","HCV","AGE","CENTER","STATUS")
+apply(surv_fut,2,function(v) sum(is.na(v)))
+surv_fut$CESD[is.na(surv_fut$CESD)]=mean(surv_his$CESD)
+surv_fut$LEU3N[is.na(surv_fut$LEU3N)]=mean(surv_his$LEU3N)
+surv_fut$LEU3N_log=log(surv_fut$LEU3N+1)
+surv_fut$LEU3N2=surv_fut$LEU3N^2
+surv_fut$STATUS=ifelse(surv_fut$STATUS==1,0,1)
+dim(surv_fut)
+
+
+
+Z=X[X$MACSID%in%new_cohort,]
+freq_fut=NULL
+for(i in new_cohort){
+  KK=X[X$MACSID==i,]
+  start=na.omit(KK$VISITY.x)[1]
+  
+  leu3n=ifelse(sum(!is.na(KK$LEU3N))==0,NA,na.omit(KK$LEU3N)[1])
+  cesd=ifelse(sum(!is.na(KK$CESD))==0,NA,na.omit(KK$CESD)[1])
+  hcv=ifelse(sum(!is.na(KK$HCV))==0,NA,na.omit(KK$HCV)[1])
+  age=ifelse(sum(!is.na(KK$AGE))==0,NA,na.omit(KK$AGE)[1])
+  center=ifelse(sum(!is.na(KK$CENTR.x))==0,NA,na.omit(KK$CENTR.x)[1])
+  status=ifelse(sum(!is.na(KK$STATUS))==0,NA,na.omit(KK$STATUS)[1])
+  
+  freq_fut=rbind(freq_fut,c(start,leu3n,cesd,hcv,age,center,status))
+}
+freq_fut=as.data.frame(freq_fut)
+names(freq_fut)=c("start","LEU3N","CESD","HCV","AGE","CENTER","STATUS")
+freq_fut$CESD[is.na(freq_fut$CESD)]=mean(freq_his$CESD)
+freq_fut$LEU3N[is.na(freq_fut$LEU3N)]=mean(freq_his$LEU3N)
+freq_fut$LEU3N_log=log(freq_fut$LEU3N+1)
+freq_fut$LEU3N2=freq_fut$LEU3N^2
+freq_fut$STATUS=ifelse(freq_fut$STATUS==1,0,1)
+dim(freq_fut)
+
+survtime_fut=summary(survfit(cox,surv_fut[,c('LEU3N',"LEU3N2","CESD","HCV","AGE","CENTER","STATUS")]))[['table']][,'median']
+survtime_fut[is.na(survtime_fut)]=2017-surv_fut$start[is.na(survtime_fut)]
+lambdas_fut=exp(as.matrix(cbind(rep(1,nrow(freq_fut)),cbind(freq_fut[,c("LEU3N","LEU3N2","AGE","STATUS")], 
+                                                            ifelse(freq_fut$CENTER==2,1,0), 
+                                                            ifelse(freq_fut$CENTER==3,1,0), 
+                                                            ifelse(freq_fut$CENTER==4,1,0))))%*%as.matrix(count[['coefficients']])[,1])
+```
+
+Predict number of assessments using CPR: 
+
+```{r}
+predictor_fut = as.matrix(cbind(rep(1,nrow(freq_fut)),cbind(freq_fut[,c("LEU3N","LEU3N2","AGE","STATUS")], 
+                                                            ifelse(freq_fut$CENTER==2,1,0), 
+                                                            ifelse(freq_fut$CENTER==3,1,0), 
+                                                            ifelse(freq_fut$CENTER==4,1,0)))) 
+ans_fut = exp(predictor_fut %*% as.matrix(model_pred_N@coefficients))
+# time_fut = 2017 - surv_fut$start
+time_fut = survtime_fut
+pred_N_fut = ceiling(time_fut * ans_fut)
+```
+
+Cross Validation for health group: 
+
+```{r}
+X=Total[!(is.na(Total$MEM07_NBA)) & !(is.na(Total$WMEM07_NBA)) & !(is.na(Total$LEARN07_NBA)) &
+          !(is.na(Total$SPEED07_NBA)) & !(is.na(Total$MOTOR07_NBA)) & !(is.na(Total$EXEC07_NBA)),]
+UU=NULL
+for(i in unique(X$MACSID)){
+  KK=X[X$MACSID==i,]
+  KK$time=c(0,diff(KK$VISITY.x))
+  KK$visit=1:nrow(KK)
+  UU=rbind(UU,KK)
+}
+X=UU
+X$time2=X$time^2
+X$time3=X$time^3
+X0=X[X$STATUS==1 & X$VISITY.x<2001,c('MACSID',"MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA",'time','time2','time3','visit')]
+
+set.seed(2020)
+ids=sample(unique(X0$MACSID))
+id1=ids[1:174]
+id2=ids[175:348]
+id3=ids[349:522]
+id4=ids[523:696]
+id5=ids[697:870]
+
+KK1=melt(X0[!X0$MACSID%in%id1,],id=c('visit','MACSID','time','time2','time3'))
+mlme1=summary(lmer(value~factor(variable)+factor(variable)*time+factor(variable)*time2+factor(variable)*time3+(1|MACSID)+(1|visit:MACSID)+(1|variable:MACSID),data=KK1))
+
+
+KK2=melt(X0[!X0$MACSID%in%id2,],id=c('visit','MACSID','time','time2','time3'))
+mlme2=summary(lmer(value~factor(variable)+factor(variable)*time+factor(variable)*time2+factor(variable)*time3+(1|MACSID)+(1|visit:MACSID)+(1|variable:MACSID),data=KK2))
+
+
+KK3=melt(X0[!X0$MACSID%in%id3,],id=c('visit','MACSID','time','time2','time3'))
+mlme3=summary(lmer(value~factor(variable)+factor(variable)*time+factor(variable)*time2+factor(variable)*time3+(1|MACSID)+(1|visit:MACSID)+(1|variable:MACSID),data=KK3))
+
+
+KK4=melt(X0[!X0$MACSID%in%id4,],id=c('visit','MACSID','time','time2','time3'))
+mlme4=summary(lmer(value~factor(variable)+factor(variable)*time+factor(variable)*time2+factor(variable)*time3+(1|MACSID)+(1|visit:MACSID)+(1|variable:MACSID),data=KK4))
+
+
+KK5=melt(X0[!X0$MACSID%in%id5,],id=c('visit','MACSID','time','time2','time3'))
+mlme5=summary(lmer(value~factor(variable)+factor(variable)*time+factor(variable)*time2+factor(variable)*time3+(1|MACSID)+(1|visit:MACSID)+(1|variable:MACSID),data=KK5))
+
+# DAC on the whole 87 health people in training set
+KK=melt(X0,id=c('visit','MACSID','time','time2','time3'))
+mlme=summary(lmer(value~factor(variable)+factor(variable)*time+factor(variable)*time2+factor(variable)*time3+(1|MACSID)+(1|visit:MACSID)+(1|variable:MACSID),data=KK))
+
+
+estmean1=mlme1$coeff[1,1]+c(0,mlme1$coeff[2:6,1])
+coef11=mlme1$coeff[7,1]+c(0,mlme1$coeff[10:14,1])
+coef21=mlme1$coeff[8,1]+c(0,mlme1$coeff[15:19,1])
+coef31=mlme1$coeff[9,1]+c(0,mlme1$coeff[20:24,1])
+
+estmean2=mlme2$coeff[1,1]+c(0,mlme2$coeff[2:6,1])
+coef12=mlme2$coeff[7,1]+c(0,mlme2$coeff[10:14,1])
+coef22=mlme2$coeff[8,1]+c(0,mlme2$coeff[15:19,1])
+coef32=mlme2$coeff[9,1]+c(0,mlme2$coeff[20:24,1])
+
+estmean3=mlme3$coeff[1,1]+c(0,mlme3$coeff[2:6,1])
+coef13=mlme3$coeff[7,1]+c(0,mlme3$coeff[10:14,1])
+coef23=mlme3$coeff[8,1]+c(0,mlme3$coeff[15:19,1])
+coef33=mlme3$coeff[9,1]+c(0,mlme3$coeff[20:24,1])
+
+estmean4=mlme4$coeff[1,1]+c(0,mlme4$coeff[2:6,1])
+coef14=mlme4$coeff[7,1]+c(0,mlme4$coeff[10:14,1])
+coef24=mlme4$coeff[8,1]+c(0,mlme4$coeff[15:19,1])
+coef34=mlme4$coeff[9,1]+c(0,mlme4$coeff[20:24,1])
+
+estmean5=mlme5$coeff[1,1]+c(0,mlme5$coeff[2:6,1])
+coef15=mlme5$coeff[7,1]+c(0,mlme5$coeff[10:14,1])
+coef25=mlme5$coeff[8,1]+c(0,mlme5$coeff[15:19,1])
+coef35=mlme5$coeff[9,1]+c(0,mlme5$coeff[20:24,1])
+
+estmean=mlme$coeff[1,1]+c(0,mlme$coeff[2:6,1])
+coef1=mlme$coeff[7,1]+c(0,mlme$coeff[10:14,1])
+coef2=mlme$coeff[8,1]+c(0,mlme$coeff[15:19,1])
+coef3=mlme$coeff[9,1]+c(0,mlme$coeff[20:24,1])
+```
+
+```{r}
+inv_cov=inv_cov1=inv_cov2=inv_cov3=inv_cov4=inv_cov5=NULL
+for(nvisit in 1:42){
+  estcov=matrix(rep(0,6*6*nvisit^2),ncol=6*nvisit)
+  for(k in 1:(6*nvisit)){
+    for(j in 1:(6*nvisit)){
+      if(k==j)
+        estcov[k,j]=sum(as.numeric(mlme[['varcor']]))+mlme[['sigma']]^2
+      else if((k-j)%%6==0)
+        estcov[k,j]=sum(as.numeric(mlme[['varcor']])[-1])
+      else if((k-1)%/%6==(j-1)%/%6)
+        estcov[k,j]=sum(as.numeric(mlme[['varcor']])[-2])
+      else
+        estcov[k,j]=sum(as.numeric(mlme[['varcor']])[3])
+    }
+  }
+  inv_cov[[nvisit]]=solve(estcov)
+  
+  
+  estcov=matrix(rep(0,6*6*nvisit^2),ncol=6*nvisit)
+  for(k in 1:(6*nvisit)){
+    for(j in 1:(6*nvisit)){
+      if(k==j)
+        estcov[k,j]=sum(as.numeric(mlme1[['varcor']]))+mlme1[['sigma']]^2
+      else if((k-j)%%6==0)
+        estcov[k,j]=sum(as.numeric(mlme1[['varcor']])[-1])
+      else if((k-1)%/%6==(j-1)%/%6)
+        estcov[k,j]=sum(as.numeric(mlme1[['varcor']])[-2])
+      else
+        estcov[k,j]=sum(as.numeric(mlme1[['varcor']])[3])
+    }
+  }
+  inv_cov1[[nvisit]]=solve(estcov)
+  
+  
+  estcov=matrix(rep(0,6*6*nvisit^2),ncol=6*nvisit)
+  for(k in 1:(6*nvisit)){
+    for(j in 1:(6*nvisit)){
+      if(k==j)
+        estcov[k,j]=sum(as.numeric(mlme2[['varcor']]))+mlme2[['sigma']]^2
+      else if((k-j)%%6==0)
+        estcov[k,j]=sum(as.numeric(mlme2[['varcor']])[-1])
+      else if((k-1)%/%6==(j-1)%/%6)
+        estcov[k,j]=sum(as.numeric(mlme2[['varcor']])[-2])
+      else
+        estcov[k,j]=sum(as.numeric(mlme2[['varcor']])[3])
+    }
+  }
+  inv_cov2[[nvisit]]=solve(estcov)
+  
+  
+  estcov=matrix(rep(0,6*6*nvisit^2),ncol=6*nvisit)
+  for(k in 1:(6*nvisit)){
+    for(j in 1:(6*nvisit)){
+      if(k==j)
+        estcov[k,j]=sum(as.numeric(mlme3[['varcor']]))+mlme3[['sigma']]^2
+      else if((k-j)%%6==0)
+        estcov[k,j]=sum(as.numeric(mlme3[['varcor']])[-1])
+      else if((k-1)%/%6==(j-1)%/%6)
+        estcov[k,j]=sum(as.numeric(mlme3[['varcor']])[-2])
+      else
+        estcov[k,j]=sum(as.numeric(mlme3[['varcor']])[3])
+    }
+  }
+  inv_cov3[[nvisit]]=solve(estcov)
+  
+  
+  estcov=matrix(rep(0,6*6*nvisit^2),ncol=6*nvisit)
+  for(k in 1:(6*nvisit)){
+    for(j in 1:(6*nvisit)){
+      if(k==j)
+        estcov[k,j]=sum(as.numeric(mlme4[['varcor']]))+mlme4[['sigma']]^2
+      else if((k-j)%%6==0)
+        estcov[k,j]=sum(as.numeric(mlme4[['varcor']])[-1])
+      else if((k-1)%/%6==(j-1)%/%6)
+        estcov[k,j]=sum(as.numeric(mlme4[['varcor']])[-2])
+      else
+        estcov[k,j]=sum(as.numeric(mlme4[['varcor']])[3])
+    }
+  }
+  inv_cov4[[nvisit]]=solve(estcov)
+  
+  
+  estcov=matrix(rep(0,6*6*nvisit^2),ncol=6*nvisit)
+  for(k in 1:(6*nvisit)){
+    for(j in 1:(6*nvisit)){
+      if(k==j)
+        estcov[k,j]=sum(as.numeric(mlme5[['varcor']]))+mlme5[['sigma']]^2
+      else if((k-j)%%6==0)
+        estcov[k,j]=sum(as.numeric(mlme5[['varcor']])[-1])
+      else if((k-1)%/%6==(j-1)%/%6)
+        estcov[k,j]=sum(as.numeric(mlme5[['varcor']])[-2])
+      else
+        estcov[k,j]=sum(as.numeric(mlme5[['varcor']])[3])
+    }
+  }
+  inv_cov5[[nvisit]]=solve(estcov)
+}
+```
+
+
+```{r}
+thres=thres1=thres2=thres3=thres4=thres5=NULL
+lambdas_cv=survtime_cv=NULL
+for(layer in 1:5){
+  id_freq_surv=(1:174)+(layer-1)*174
+  count_cv <- glm(freq~LEU3N+LEU3N2+AGE+STATUS+factor(CENTER)+offset(log(time)),family=poisson(link=log),data=freq_his[!History_ID%in%ids[id_freq_surv],])
+  temp=freq_his[History_ID%in%ids[id_freq_surv],]
+  temp=temp[order(ids[id_freq_surv]),]
+  lambdas_cv=c(lambdas_cv,exp(as.matrix(cbind(rep(1,174),cbind(temp[,c("LEU3N","LEU3N2","AGE","STATUS")], 
+                                                               ifelse(temp$CENTER==2,1,0), 
+                                                               ifelse(temp$CENTER==3,1,0), 
+                                                               ifelse(temp$CENTER==4,1,0))))%*%as.matrix(count_cv[['coefficients']])[,1])
+  )
+  cox_cv = coxph(Surv(time, indicator) ~ LEU3N+LEU3N2+CESD+HCV+AGE+factor(CENTER)+STATUS,data=surv_his[!History_ID%in%ids[id_freq_surv],])
+  temp=surv_his[History_ID%in%ids[id_freq_surv],]
+  temp=temp[order(ids[id_freq_surv]),]
+  survtime_haha=summary(survfit(cox,temp[,c('LEU3N',"LEU3N2","CESD","HCV","AGE","CENTER","STATUS")]))[['table']][,'median']
+  survtime_haha[is.na(survtime_haha)]=2001-temp[,"start"][is.na(survtime_haha)]
+  survtime_cv=c(survtime_cv,survtime_haha)
+}
+```
+
+Predict N in CV using CPR: 
+
+```{r}
+pred_N_cv = NULL
+for(layer in 1:5){
+  id_freq_surv=(1:174)+(layer-1)*174
+  temp=freq_his[History_ID%in%ids[id_freq_surv],]
+  temp=temp[order(ids[id_freq_surv]),]
+  predictor_cv = as.matrix(cbind(rep(1,174),cbind(temp[,c("LEU3N","LEU3N2","AGE","STATUS")], 
+                                                            ifelse(temp$CENTER==2,1,0), 
+                                                            ifelse(temp$CENTER==3,1,0), 
+                                                            ifelse(temp$CENTER==4,1,0)))) 
+  ans_cv = exp(predictor_cv %*% model_pred_N@coefficients)
+  pred_N_cv = c(pred_N_cv,ceiling(temp[["time"]] * ans_cv)) # +1?
+}
+```
+
+```{r}
+thres=thres1=thres2=thres3=thres4=thres5=NULL
+# perform permutation test in the rest 4 folds
+for(jj in sample(ids[!ids%in%id1],5000,replace = TRUE)){
+  
+  NP=X0[X0[['MACSID']]==jj,]
+  nvisit=nrow(NP)
+  
+  error=NP[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]-
+    matrix(rep(estmean1,each=nvisit),ncol=6)-matrix(rep(NP[['time']],6),ncol=6)*matrix(rep(coef11,each=nvisit),ncol=6)-
+    matrix(rep(NP[['time2']],6),ncol=6)*matrix(rep(coef21,each=nvisit),ncol=6)-matrix(rep(NP[['time3']],6),ncol=6)*matrix(rep(coef31,each=nvisit),ncol=6)
+  
+  error=error[sample(1:nvisit),sample(1:6)]
+  
+  nps2=as.vector(t(error))
+  MEANS=rep(0,nvisit*6)
+  
+  
+  LMNCs=NULL
+  directions=NULL
+  
+  directions=c(directions,ifelse(sum(nps2[1:6]-MEANS[1:6])<0,-1,1))
+  LMNCs=c(LMNCs,(nps2[1:6]-MEANS[1:6])%*%inv_cov1[[1]]%*%(nps2[1:6]-MEANS[1:6]))
+  if(nvisit>1)
+    for(k in 2:nvisit){
+      directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+      LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov1[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+    }
+  diffs=LMNCs-c(0,LMNCs[-nvisit])
+  diffs=diffs*directions
+  
+  thres1=c(thres1,diffs)
+}
+
+for(jj in sample(ids[!ids%in%id2],5000,replace = TRUE)){
+  
+  NP=X0[X0[['MACSID']]==jj,]
+  nvisit=nrow(NP)
+  
+  error=NP[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]-
+    matrix(rep(estmean2,each=nvisit),ncol=6)-matrix(rep(NP[['time']],6),ncol=6)*matrix(rep(coef12,each=nvisit),ncol=6)-
+    matrix(rep(NP[['time2']],6),ncol=6)*matrix(rep(coef22,each=nvisit),ncol=6)-matrix(rep(NP[['time3']],6),ncol=6)*matrix(rep(coef32,each=nvisit),ncol=6)
+  
+  error=error[sample(1:nvisit),sample(1:6)]
+  
+  nps2=as.vector(t(error))
+  MEANS=rep(0,nvisit*6)
+  
+  
+  LMNCs=NULL
+  directions=NULL
+  
+  directions=c(directions,ifelse(sum(nps2[1:6]-MEANS[1:6])<0,-1,1))
+  LMNCs=c(LMNCs,(nps2[1:6]-MEANS[1:6])%*%inv_cov2[[1]]%*%(nps2[1:6]-MEANS[1:6]))
+  if(nvisit>1)
+    for(k in 2:nvisit){
+      directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+      LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov2[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+    }
+  diffs=LMNCs-c(0,LMNCs[-nvisit])
+  diffs=diffs*directions
+  
+  thres2=c(thres2,diffs)
+  
+}
+
+for(jj in sample(ids[!ids%in%id3],5000,replace = TRUE)){
+  
+  NP=X0[X0[['MACSID']]==jj,]
+  nvisit=nrow(NP)
+  
+  error=NP[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]-
+    matrix(rep(estmean3,each=nvisit),ncol=6)-matrix(rep(NP[['time']],6),ncol=6)*matrix(rep(coef13,each=nvisit),ncol=6)-
+    matrix(rep(NP[['time2']],6),ncol=6)*matrix(rep(coef23,each=nvisit),ncol=6)-matrix(rep(NP[['time3']],6),ncol=6)*matrix(rep(coef33,each=nvisit),ncol=6)
+  
+  error=error[sample(1:nvisit),sample(1:6)]
+  
+  nps2=as.vector(t(error))
+  MEANS=rep(0,nvisit*6)
+  
+  
+  LMNCs=NULL
+  directions=NULL
+  
+  directions=c(directions,ifelse(sum(nps2[1:6]-MEANS[1:6])<0,-1,1))
+  LMNCs=c(LMNCs,(nps2[1:6]-MEANS[1:6])%*%inv_cov3[[1]]%*%(nps2[1:6]-MEANS[1:6]))
+  if(nvisit>1)
+    for(k in 2:nvisit){
+      directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+      LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov3[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+    }
+  diffs=LMNCs-c(0,LMNCs[-nvisit])
+  diffs=diffs*directions
+  
+  thres3=c(thres3,diffs)
+  
+}
+
+for(jj in sample(ids[!ids%in%id4],5000,replace = TRUE)){
+  
+  NP=X0[X0[['MACSID']]==jj,]
+  nvisit=nrow(NP)
+  
+  error=NP[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]-
+    matrix(rep(estmean4,each=nvisit),ncol=6)-matrix(rep(NP[['time']],6),ncol=6)*matrix(rep(coef14,each=nvisit),ncol=6)-
+    matrix(rep(NP[['time2']],6),ncol=6)*matrix(rep(coef24,each=nvisit),ncol=6)-matrix(rep(NP[['time3']],6),ncol=6)*matrix(rep(coef34,each=nvisit),ncol=6)
+  
+  error=error[sample(1:nvisit),sample(1:6)]
+  
+  nps2=as.vector(t(error))
+  MEANS=rep(0,nvisit*6)
+  
+  
+  LMNCs=NULL
+  directions=NULL
+  
+  directions=c(directions,ifelse(sum(nps2[1:6]-MEANS[1:6])<0,-1,1))
+  LMNCs=c(LMNCs,(nps2[1:6]-MEANS[1:6])%*%inv_cov4[[1]]%*%(nps2[1:6]-MEANS[1:6]))
+  if(nvisit>1)
+    for(k in 2:nvisit){
+      directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+      LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov4[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+    }
+  diffs=LMNCs-c(0,LMNCs[-nvisit])
+  diffs=diffs*directions
+  
+  thres4=c(thres4,diffs)
+}
+
+for(jj in sample(ids[!ids%in%id5],5000,replace = TRUE)){
+  
+  NP=X0[X0[['MACSID']]==jj,]
+  nvisit=nrow(NP)
+  
+  error=NP[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]-
+    matrix(rep(estmean5,each=nvisit),ncol=6)-matrix(rep(NP[['time']],6),ncol=6)*matrix(rep(coef15,each=nvisit),ncol=6)-
+    matrix(rep(NP[['time2']],6),ncol=6)*matrix(rep(coef25,each=nvisit),ncol=6)-matrix(rep(NP[['time3']],6),ncol=6)*matrix(rep(coef35,each=nvisit),ncol=6)
+  
+  error=error[sample(1:nvisit),sample(1:6)]
+  
+  nps2=as.vector(t(error))
+  MEANS=rep(0,nvisit*6)
+  
+  
+  LMNCs=NULL
+  directions=NULL
+  
+  directions=c(directions,ifelse(sum(nps2[1:6]-MEANS[1:6])<0,-1,1))
+  LMNCs=c(LMNCs,(nps2[1:6]-MEANS[1:6])%*%inv_cov5[[1]]%*%(nps2[1:6]-MEANS[1:6]))
+  if(nvisit>1)
+    for(k in 2:nvisit){
+      directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+      LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov5[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+    }
+  diffs=LMNCs-c(0,LMNCs[-nvisit])
+  diffs=diffs*directions
+  
+  thres5=c(thres5,diffs)
+  
+}
+
+for(jj in sample(ids,5000,replace = TRUE)){
+  
+  NP=X0[X0[['MACSID']]==jj,]
+  nvisit=nrow(NP)
+  
+  error=NP[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]-
+    matrix(rep(estmean,each=nvisit),ncol=6)-matrix(rep(NP[['time']],6),ncol=6)*matrix(rep(coef1,each=nvisit),ncol=6)-
+    matrix(rep(NP[['time2']],6),ncol=6)*matrix(rep(coef2,each=nvisit),ncol=6)-matrix(rep(NP[['time3']],6),ncol=6)*matrix(rep(coef3,each=nvisit),ncol=6)
+  
+  error=error[sample(1:nvisit),sample(1:6)]
+  
+  nps2=as.vector(t(error))
+  MEANS=rep(0,nvisit*6)
+  
+  
+  LMNCs=NULL
+  directions=NULL
+  
+  directions=c(directions,ifelse(sum(nps2[1:6]-MEANS[1:6])<0,-1,1))
+  LMNCs=c(LMNCs,(nps2[1:6]-MEANS[1:6])%*%inv_cov[[1]]%*%(nps2[1:6]-MEANS[1:6]))
+  if(nvisit>1)
+    for(k in 2:nvisit){
+      directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+      LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+    }
+  diffs=LMNCs-c(0,LMNCs[-nvisit])
+  diffs=diffs*directions
+  
+  thres=c(thres,diffs)
+}
+```
+
+
+
+```{r}
+c=1.4
+compare=compare1=compare2=compare3=compare4=compare5=NULL
+alphas=seq(0.001,0.1,by=0.0005)*c
+for(jj in 1:90){
+  compare[[jj]]=matrix(quantile(thres,rep(2*(jj:1)/jj/(jj+1),each=length(alphas))*rep(alphas,jj)),ncol=jj)
+  compare1[[jj]]=matrix(quantile(thres1,rep(2*(jj:1)/jj/(jj+1),each=length(alphas))*rep(alphas,jj)),ncol=jj)
+  compare2[[jj]]=matrix(quantile(thres2,rep(2*(jj:1)/jj/(jj+1),each=length(alphas))*rep(alphas,jj)),ncol=jj)
+  compare3[[jj]]=matrix(quantile(thres3,rep(2*(jj:1)/jj/(jj+1),each=length(alphas))*rep(alphas,jj)),ncol=jj)
+  compare4[[jj]]=matrix(quantile(thres4,rep(2*(jj:1)/jj/(jj+1),each=length(alphas))*rep(alphas,jj)),ncol=jj)
+  compare5[[jj]]=matrix(quantile(thres5,rep(2*(jj:1)/jj/(jj+1),each=length(alphas))*rep(alphas,jj)),ncol=jj)
+#  cat(jj,'\n')
+}
+res=NULL
+for(i in 1:174){
+  #cat(i,'\n')
+  this_id=ids[i+174*0]
+  temp=X0[X0$MACSID==this_id,]
+  time=temp$time
+  visit.num2=length(time)
+  nps2=c(t(temp[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]))
+  
+  MEANS=rep(estmean1,visit.num2)+rep(coef11,visit.num2)*rep(time,each=6)+
+    rep(coef21,visit.num2)*rep(time^2,each=6)+rep(coef31,visit.num2)*rep(time^3,each=6)
+  
+  LMNCs=NULL
+  directions=NULL
+  for(k in 1:visit.num2){
+    directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+    LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov1[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+  }
+  diffs=LMNCs-c(0,LMNCs[-visit.num2])
+  diffs=diffs*directions
+  
+  
+  # N_prect=ceiling(min(survtime_cv[i+174*0],2001-surv_his$start[History_ID==this_id])*lambdas_cv[i+174*0])+1
+  # using CPR to get N_prect
+  N_prect = pred_N_cv[i+174*0]
+  
+  signal=NULL
+  for(jj in 1:length(alphas)){
+    if(visit.num2<=N_prect){
+      MF=compare1[[N_prect]][jj,1:visit.num2]
+    }else{
+      MF=c(compare1[[N_prect]][jj,],rep(compare1[[N_prect]][jj,N_prect],visit.num2-N_prect))
+    }
+    
+    signal=c(signal, ifelse(sum(diffs<MF)>0,1,0))
+  }
+  res=cbind(res,signal)
+}
+
+for(i in 1:174){
+  #cat(i,'\n')
+  this_id=ids[i+174*1]
+  temp=X0[X0$MACSID==this_id,]
+  time=temp$time
+  visit.num2=length(time)
+  nps2=c(t(temp[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]))
+  
+  MEANS=rep(estmean2,visit.num2)+rep(coef12,visit.num2)*rep(time,each=6)+
+    rep(coef22,visit.num2)*rep(time^2,each=6)+rep(coef32,visit.num2)*rep(time^3,each=6)
+  
+  LMNCs=NULL
+  directions=NULL
+  for(k in 1:visit.num2){
+    directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+    LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov2[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+  }
+  diffs=LMNCs-c(0,LMNCs[-visit.num2])
+  diffs=diffs*directions
+  # N_prect=ceiling(min(survtime_cv[i+174*1],2001-surv_his$start[History_ID==this_id])*lambdas_cv[i+174*1])+1
+  N_prect = pred_N_cv[i+174*1]
+  
+  signal=NULL
+  for(jj in 1:length(alphas)){
+    if(visit.num2<=N_prect){
+      MF=compare2[[N_prect]][jj,1:visit.num2]
+    }else{
+      MF=c(compare2[[N_prect]][jj,],rep(compare2[[N_prect]][jj,N_prect],visit.num2-N_prect))
+    }
+    
+    signal=c(signal, ifelse(sum(diffs<MF)>0,1,0))
+  }
+  res=cbind(res,signal)
+  
+}
+
+for(i in 1:174){
+  #cat(i,'\n')
+  this_id=ids[i+174*2]
+  temp=X0[X0$MACSID==this_id,]
+  time=temp$time
+  visit.num2=length(time)
+  nps2=c(t(temp[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]))
+  
+  MEANS=rep(estmean3,visit.num2)+rep(coef13,visit.num2)*rep(time,each=6)+
+    rep(coef23,visit.num2)*rep(time^2,each=6)+rep(coef33,visit.num2)*rep(time^3,each=6)
+  
+  LMNCs=NULL
+  directions=NULL
+  for(k in 1:visit.num2){
+    directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+    LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov3[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+  }
+  diffs=LMNCs-c(0,LMNCs[-visit.num2])
+  diffs=diffs*directions
+  #N_prect=ceiling(min(survtime_cv[i+174*2],2001-surv_his$start[History_ID==this_id])*lambdas_cv[i+174*2])+1
+  N_prect = pred_N_cv[i+174*2]
+  
+  signal=NULL
+  for(jj in 1:length(alphas)){
+    if(visit.num2<=N_prect){
+      MF=compare3[[N_prect]][jj,1:visit.num2]
+    }else{
+      MF=c(compare3[[N_prect]][jj,],rep(compare3[[N_prect]][jj,N_prect],visit.num2-N_prect))
+    }
+    
+    signal=c(signal, ifelse(sum(diffs<MF)>0,1,0))
+  }
+  res=cbind(res,signal)
+  
+  
+}
+
+for(i in 1:174){
+  #cat(i,'\n')
+  this_id=ids[i+174*3]
+  temp=X0[X0$MACSID==this_id,]
+  time=temp$time
+  visit.num2=length(time)
+  nps2=c(t(temp[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]))
+  
+  MEANS=rep(estmean4,visit.num2)+rep(coef14,visit.num2)*rep(time,each=6)+
+    rep(coef24,visit.num2)*rep(time^2,each=6)+rep(coef34,visit.num2)*rep(time^3,each=6)
+  
+  LMNCs=NULL
+  directions=NULL
+  for(k in 1:visit.num2){
+    directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+    LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov4[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+  }
+  diffs=LMNCs-c(0,LMNCs[-visit.num2])
+  diffs=diffs*directions
+  # N_prect=ceiling(min(survtime_cv[i+174*3],2001-surv_his$start[History_ID==this_id])*lambdas_cv[i+174*3])+1
+  N_prect = pred_N_cv[i+174*3]
+  
+  signal=NULL
+  for(jj in 1:length(alphas)){
+    if(visit.num2<=N_prect){
+      MF=compare4[[N_prect]][jj,1:visit.num2]
+    }else{
+      MF=c(compare4[[N_prect]][jj,],rep(compare4[[N_prect]][jj,N_prect],visit.num2-N_prect))
+    }
+    
+    signal=c(signal, ifelse(sum(diffs<MF)>0,1,0))
+  }
+  res=cbind(res,signal)
+}
+
+for(i in 1:174){
+  #cat(i,'\n')
+  this_id=ids[i+174*4]
+  temp=X0[X0$MACSID==this_id,]
+  time=temp$time
+  visit.num2=length(time)
+  nps2=c(t(temp[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]))
+  
+  MEANS=rep(estmean5,visit.num2)+rep(coef15,visit.num2)*rep(time,each=6)+
+    rep(coef25,visit.num2)*rep(time^2,each=6)+rep(coef35,visit.num2)*rep(time^3,each=6)
+  
+  LMNCs=NULL
+  directions=NULL
+  for(k in 1:visit.num2){
+    directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+    LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov5[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+  }
+  diffs=LMNCs-c(0,LMNCs[-visit.num2])
+  diffs=diffs*directions
+  # N_prect=ceiling(min(survtime_cv[i+174*4],2001-surv_his$start[History_ID==this_id])*lambdas_cv[i+174*4])+1
+  N_prect = pred_N_cv[i+174*4]
+  
+  signal=NULL
+  for(jj in 1:length(alphas)){
+    if(visit.num2<=N_prect){
+      MF=compare5[[N_prect]][jj,1:visit.num2]
+    }else{
+      MF=c(compare5[[N_prect]][jj,],rep(compare5[[N_prect]][jj,N_prect],visit.num2-N_prect))
+    }
+    
+    signal=c(signal, ifelse(sum(diffs<MF)>0,1,0))
+  }
+  res=cbind(res,signal)
+}
+```
+
+
+
+
+```{r}
+plot(rowMeans(res)~seq(0.001,0.1,by=0.0005),ylim=c(0,.1),type='l')
+max(rowMeans(res))
+lines(c(0,0.1),c(0,0.1),col=2)
+```
+
+# The plot show that constant factor is 1.4
+# work on new data
+
+```{r}
+N_prect_lis = rep(0, length(new_cohort))
+X=Total[!(is.na(Total$MEM07_NBA)) & !(is.na(Total$WMEM07_NBA)) & !(is.na(Total$LEARN07_NBA)) &
+          !(is.na(Total$SPEED07_NBA)) & !(is.na(Total$MOTOR07_NBA)) & !(is.na(Total$EXEC07_NBA)),]
+UU=NULL
+for(i in unique(X$MACSID)){
+  KK=X[X$MACSID==i,]
+  KK$time=c(0,diff(KK$VISITY.x))
+  KK$visit=1:nrow(KK)
+  UU=rbind(UU,KK)
+}
+X=UU
+X$time2=X$time^2
+X$time3=X$time^3
+hea=hiv=NULL
+true_N = rep(0, length(new_cohort))
+for(i in 1:length(new_cohort)){
+  temp=X[X$MACSID==new_cohort[i],]
+  time=temp$time
+  true_N[i] = nrow(temp)
+  visit.num2=length(time)
+  nps2=c(t(temp[,c("MOTOR07_NBA", "EXEC07_NBA", "SPEED07_NBA", "LEARN07_NBA","MEM07_NBA", "WMEM07_NBA")]))
+  
+  MEANS=rep(estmean,visit.num2)+rep(coef1,visit.num2)*rep(time,each=6)+
+    rep(coef2,visit.num2)*rep(time^2,each=6)+rep(coef3,visit.num2)*rep(time^3,each=6)
+  
+  LMNCs=NULL
+  directions=NULL
+  for(k in 1:visit.num2){
+    directions=c(directions,ifelse(sum(nps2[(k*6-5):(k*6)]-MEANS[(k*6-5):(k*6)])<0,-1,1))
+    LMNCs=c(LMNCs,(nps2[1:(k*6)]-MEANS[1:(k*6)])%*%inv_cov[[k]]%*%(nps2[1:(k*6)]-MEANS[1:(k*6)]))
+  }
+  diffs=LMNCs-c(0,LMNCs[-visit.num2])
+  diffs=diffs*directions
+  
+  #N_prect=ceiling(min(survtime_fut[i],2017-surv_fut$start[i])*lambdas_fut[i])+1
+  N_prect_lis[i]=ceiling(min(survtime_fut[i],2017-surv_fut$start[i])*lambdas_fut[i])+1
+  #N_prect = N_prect_lis[i]
+  # CPR
+  N_prect = pred_N_fut[i,]
+  
+  signal=NULL
+  for(jj in 1:length(alphas)){
+    if(visit.num2<=N_prect){
+      MF=compare[[N_prect]][jj,1:visit.num2]
+    }else{
+      MF=c(compare[[N_prect]][jj,],rep(compare[[N_prect]][jj,N_prect],visit.num2-N_prect))
+    }
+    
+    signal=c(signal, ifelse(sum(diffs<MF)>0,1,0))
+  }
+  if(surv_fut$STATUS[i]==0)
+    hea=cbind(hea,signal) # negative
+  else
+    hiv=cbind(hiv,signal)
+}
+
+plot(rowMeans(res)~seq(0.001,0.1,by=0.0005),ylim=c(0,.2),type='l', lty=2,lwd=2,xlab='alpha',ylab='Family-wise Error Rate')
+lines(seq(0.001,0.1,by=0.0005),rowMeans(hea),lty=3,lwd=2)
+lines(seq(0.001,0.1,by=0.0005),rowMeans(hiv),lty=4,lwd=2)
+
+lines(c(0,0.1),c(0,0.1),lty=1,lwd=2)
+legend("bottomright",legend=c('FWER = alpha, CPR','Seronegative (historical)','Seronegative (newer)','Seropositive (newer)'),
+       lty=1:4,pch=c(NA,NA,NA,NA),lwd=2)
+```
+
+
+
+```{r}
+summary(N_prect_lis - true_N)
+summary(pred_N_fut - true_N)
+summary(pred_N_fut - N_prect_lis)
+```
+
