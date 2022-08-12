@@ -111,3 +111,4 @@ lines(r1~seq(0.001,0.1,by=0.0001),lty=1,col="grey65",lwd=2)
 lines(r2~seq(0.001,0.1,by=0.0001),lty=2,col="grey65",lwd=2)
 lines(r3~seq(0.001,0.1,by=0.0001),lty=3,col="grey65",lwd=2)
 lines(c(0.001,.1),c(0.001,.1),lty=4,col="grey40",lwd=2)
+
