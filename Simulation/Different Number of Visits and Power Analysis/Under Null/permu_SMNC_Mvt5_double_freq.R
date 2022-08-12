@@ -522,3 +522,4 @@ save(SMNC_permu_MultiT5_typeI_doubleQ,file = 'SMNC_permu_MultiT5_typeI_doubleQ.r
 sfStop()
 
 EOF
+
