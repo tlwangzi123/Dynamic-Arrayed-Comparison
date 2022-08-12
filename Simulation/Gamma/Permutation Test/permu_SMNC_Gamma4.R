@@ -592,3 +592,4 @@ save(SMNC_permu_Gamma4,file = 'SMNC_permu_Gamma4.rda')
 sfStop()
 
 EOF
+
