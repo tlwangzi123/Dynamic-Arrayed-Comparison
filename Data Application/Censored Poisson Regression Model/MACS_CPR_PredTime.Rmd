@@ -1041,3 +1041,4 @@ summary(pred_N_fut - N_prect_lis)
 hist(pred_N_fut - true_N, breaks = seq(-10,35,1), xlab = "Differences based on CPR", freq = FALSE, main = "Censored Poisson Regression")
 lines(density(pred_N_fut - true_N), col = 2, lwd = 2)
 ```
+
